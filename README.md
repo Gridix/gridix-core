@@ -1,1 +1,1 @@
-# gridix-core
+# Welcome to Gridix.
