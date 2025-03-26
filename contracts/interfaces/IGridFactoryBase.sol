@@ -5,5 +5,5 @@ interface IGridFactoryBase {
     function swapFeeRate() external view returns(uint256);
     function getExecutionFee(address token) external view returns(uint256);
     function feeAddr() external view returns(address);
-    function notifyUpdated(uint256 value) external;
+    function notifyUpdated(address token, uint256 value) external;
 }

@@ -9,7 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * @dev Interface for calculating and updating user benefits
  */
 interface IBenefitCalculator {
-    function refresh(address user, address pool, uint256 value) external;
+    function refresh(address user, address token, uint256 value) external;
 }
 
 /**
@@ -69,9 +69,9 @@ abstract contract GridFactoryBase is IGridFactoryBase, Ownable {
      * @param value New total value for user's position
      * @dev Called by grid contracts when value changes
      */
-    function notifyUpdated(uint256 value) external {
+    function notifyUpdated(address token, uint256 value) external {
         if(address(benefitCalculator) != address(0) && gridContractToUser[msg.sender]!= address(0)) {
-            try benefitCalculator.refresh(gridContractToUser[msg.sender], msg.sender, value){}
+            try benefitCalculator.refresh(gridContractToUser[msg.sender], token, value){}
              catch {}
         }
     }

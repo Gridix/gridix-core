@@ -66,14 +66,14 @@ contract UniGrid is IERC721Receiver, Ownable {
      * @param upperPrice Upper price boundary of the grid
      * @param gridCount Number of grid lines
      * @param totalInvestment Total investment amount
-     * @param triggerPrice Price at which strategy is triggered
+     * @param extraToken1Amount Additional token1 amount
      */
     struct GridScheme{
         uint256 lowerPrice;
         uint256 upperPrice;
         uint256 gridCount;
         uint256 totalInvestment;
-        uint256 triggerPrice;
+        uint256 extraToken1Amount;
     }
 
     // Events
@@ -161,14 +161,13 @@ contract UniGrid is IERC721Receiver, Ownable {
             token0.safeTransfer(msg.sender, fee);
             token0.safeTransfer(gridFactory.feeAddr(), swapFee);
             token0Balance -= swapFee + fee;
+            gridFactory.notifyUpdated(address(token0), fee + swapFee);
         }
         
         // Create new liquidity positions at new price ranges
         lowerTokenId = _mintNewPosition(token0Balance, 0, gridScheme.lowerPrice, emptyGridStartPrice, false);
         upperTokenId = _mintNewPosition(0, token1Balance, emptyGridStartPrice + gridPrice, gridScheme.upperPrice, true);
         
-        // Update strategy total value and emit event
-        gridFactory.notifyUpdated(token0Balance + token1Balance * currentPrice / 1e18);
         emit RebalanceExecuted(emptyGridStartPrice, currentPrice, token0Balance, token1Balance, block.timestamp);
     }
 
@@ -177,6 +176,12 @@ contract UniGrid is IERC721Receiver, Ownable {
      * Can only be called by strategy owner
      */
     function terminateStrategyByOwner() external onlyOwner {
+        if(status == GridStrategyStatus.Inactive) {
+            token0.safeTransfer(owner(), token0.balanceOf(address(this)));
+            token1.safeTransfer(owner(), token1.balanceOf(address(this)));
+            status = GridStrategyStatus.Closed;
+            return;
+        }
         require(status == GridStrategyStatus.Active, "GNA");
         _terminateStrategy();
     }
@@ -193,15 +198,13 @@ contract UniGrid is IERC721Receiver, Ownable {
 
     /**
      * @dev Activate grid strategy
-     * @param amount Additional token1 amount to invest
      */
-    function activateGridStrategy(uint256 amount) external {
+    function activateGridStrategy() external {
         uint256 currentPrice = getPriceFromOracle();
-        if (status != GridStrategyStatus.Inactive || currentPrice > gridScheme.triggerPrice) {
+        if (status != GridStrategyStatus.Inactive || gridScheme.lowerPrice > currentPrice || gridScheme.upperPrice < currentPrice) {
             return;
         }
-        uint256 token1Amount = (msg.sender == address(gridFactory)) ? amount : 0;
-        _initial(currentPrice, token1Amount);
+        _initial(currentPrice);
     }
 
     /**
@@ -249,15 +252,14 @@ contract UniGrid is IERC721Receiver, Ownable {
     /**
      * @dev Initialize grid strategy
      * @param currentPrice Current market price
-     * @param extraToken1Amount Additional token1 amount
      */
-    function _initial(uint256 currentPrice, uint256 extraToken1Amount) internal {
+    function _initial(uint256 currentPrice) internal {
         require(gridScheme.lowerPrice < currentPrice && gridScheme.upperPrice > currentPrice, "NM");
         uint256 gridPrice = _getGridPrice();
         emptyGridStartPrice = currentPrice - gridPrice / 2;
         require(emptyGridStartPrice > gridScheme.lowerPrice + gridPrice && emptyGridStartPrice + gridPrice * 2 < gridScheme.upperPrice, "ENM");
 
-        _exactInputSingle(gridScheme, currentPrice, extraToken1Amount);
+        _exactInputSingle(gridScheme, currentPrice, gridScheme.extraToken1Amount);
         uint256 token0Amount = token0.balanceOf(address(this));
         uint256 token1Amount = token1.balanceOf(address(this));
 
@@ -267,8 +269,8 @@ contract UniGrid is IERC721Receiver, Ownable {
         upperTokenId = _mintNewPosition(0, token1Amount, realPrice, gridScheme.upperPrice, true);
 
         status = GridStrategyStatus.Active;
-        gridScheme.totalInvestment += extraToken1Amount * realPrice / 1e18;
-        gridFactory.notifyUpdated(gridScheme.totalInvestment);
+
+        gridScheme.totalInvestment += gridScheme.extraToken1Amount * realPrice / 1e18;
         emit GridStrategyActivated(realPrice, token0Amount, token1Amount, block.timestamp);
     }
 
@@ -294,12 +296,14 @@ contract UniGrid is IERC721Receiver, Ownable {
         bool zeroToOne = getZeroToOne();
         if(zeroToOne) {
             (lowerPrice, upperPrice) = _swapValues(lowerPrice, upperPrice);
+        } else {
+            (amount0ToMint, amount1ToMint) = _swapValues(amount0ToMint, amount1ToMint);
         }
 
         INonfungiblePositionManager.MintParams memory params =
             INonfungiblePositionManager.MintParams({
-                token0: address(token0),
-                token1: address(token1),
+                token0: address(token0) < address(token1) ? address(token0) : address(token1),
+                token1: address(token0) < address(token1) ? address(token1) : address(token0),
                 fee: poolFee,
                 tickLower: TickMath.getTickFromPrice(lowerPrice, zeroToOne, poolFee, direction),
                 tickUpper: TickMath.getTickFromPrice(upperPrice, zeroToOne, poolFee, direction),
@@ -357,7 +361,6 @@ contract UniGrid is IERC721Receiver, Ownable {
         uint256 token1Amount = token1.balanceOf(address(this));
         uint256 currentPrice = getPriceFromOracle();
         uint256 fee = gridFactory.getExecutionFee(address(token0));
-        gridFactory.notifyUpdated(token0Amount + token1Amount * currentPrice / 1e18);
 
         if(msg.sender != owner()) {
             if(token0Amount >= fee) {

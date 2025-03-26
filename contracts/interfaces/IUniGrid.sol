@@ -12,7 +12,7 @@ interface IUniGrid {
         uint256 upperPrice;
         uint256 gridCount;
         uint256 totalInvestment;
-        uint256 triggerPrice;
+        uint256 extraToken1Amount;
     }
     function gridScheme() external view returns(GridScheme memory);
     function status() external view returns(GridStrategyStatus);

@@ -233,16 +233,18 @@ contract UniGridHelper {
         if (sqrtRatioAX96 > sqrtRatioBX96)
             (sqrtRatioAX96, sqrtRatioBX96) = (sqrtRatioBX96, sqrtRatioAX96);
 
-        uint256 numerator1 = uint256(liquidity) << 96;
-        uint256 numerator2 = sqrtRatioBX96 - sqrtRatioAX96;
-
-        require(sqrtRatioAX96 > 0);
-
-        return mulDiv(
-            mulDiv(numerator1, numerator2, sqrtRatioBX96),
-            1,
-            sqrtRatioAX96
-        );
+        uint256 numerator1 = uint256(liquidity);
+        uint256 numerator2;
+        if(numerator1 > type(uint256).max / uint256(sqrtRatioBX96 - sqrtRatioAX96) * 2) {
+            numerator2 = numerator1 / uint256(sqrtRatioAX96) * (sqrtRatioBX96 - sqrtRatioAX96);
+        } else {
+            numerator2 = numerator1 * (sqrtRatioBX96 - sqrtRatioAX96) / uint256(sqrtRatioAX96);
+        }
+        if(numerator2 > (2**160 - 1)) {
+            return mulDiv(numerator2, 1, sqrtRatioAX96 >> 96);
+        } else {
+            return mulDiv(numerator2, 1 << 96, sqrtRatioAX96);
+        }
     }
 
     /**
@@ -259,8 +261,14 @@ contract UniGridHelper {
     ) internal pure returns (uint256 amount1) {
         if (sqrtRatioAX96 > sqrtRatioBX96)
             (sqrtRatioAX96, sqrtRatioBX96) = (sqrtRatioBX96, sqrtRatioAX96);
+        uint160 numerator = sqrtRatioBX96 - sqrtRatioAX96;
+        if(numerator > 2**48) {
+            numerator = numerator >> 48;
+        } else {
+            liquidity = liquidity >> 48;
+        }
 
-        return mulDiv(liquidity, sqrtRatioBX96 - sqrtRatioAX96, 2**96);
+        return mulDiv(liquidity, numerator, 2**48);
     }
 
     /**
@@ -348,14 +356,51 @@ contract UniGridHelper {
         bool canActivate
     ) {
         IUniGrid grid = IUniGrid(gridAddress);
-        
-        if (grid.status() != IUniGrid.GridStrategyStatus.Inactive) {
+        IUniGrid.GridScheme memory gridScheme = grid.gridScheme();
+        uint256 currentPrice = grid.getPriceFromOracle();
+        if (grid.status() != IUniGrid.GridStrategyStatus.Inactive || currentPrice > gridScheme.upperPrice || currentPrice < gridScheme.lowerPrice) {
             return false;
         }
 
-        uint256 currentPrice = grid.getPriceFromOracle();
-        uint256 triggerPrice = grid.gridScheme().triggerPrice;
+        uint256 gridPrice = (gridScheme.upperPrice - gridScheme.lowerPrice) / gridScheme.gridCount;
+        uint256 emptyGridStartPrice = currentPrice - gridPrice / 2;
+        return (emptyGridStartPrice > gridScheme.lowerPrice + gridPrice && emptyGridStartPrice + gridPrice * 2 < gridScheme.upperPrice);
+    }
+
+    function batchCheckCanActivate(address[] calldata gridAddresses) external view returns (
+        bool[] memory results
+    ) {
+        results = new bool[](gridAddresses.length);
         
-        return currentPrice <= triggerPrice;
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            results[i] = this.checkCanActivate(gridAddresses[i]);
+        }
+        
+        return results;
+    }
+
+    function batchCheckRebalanceNeeded(address[] calldata gridAddresses) external view returns (
+        bool[] memory results
+    ) {
+        results = new bool[](gridAddresses.length);
+        
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            results[i] = this.checkRebalanceNeeded(gridAddresses[i]);
+        }
+        
+        return results;
+    }
+
+    function checkGridStrategyStatus(address[] calldata gridAddresses) external view returns (
+        IUniGrid.GridStrategyStatus[] memory statuses
+    ) {
+        statuses = new IUniGrid.GridStrategyStatus[](gridAddresses.length);
+        
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            IUniGrid grid = IUniGrid(gridAddresses[i]);
+            statuses[i] = grid.status();
+        }
+        
+        return statuses;
     }
 }

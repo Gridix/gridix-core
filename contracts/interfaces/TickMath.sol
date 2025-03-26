@@ -213,7 +213,7 @@ library TickMath {
     }
 
     function getTickFromPrice(uint256 price, bool zeroToOne, uint24 poolFee, bool direction) internal pure returns (int24) {
-        uint256 sqrtPriceX96 = zeroToOne ? sqrt(1e18 * (1 << 192) / price) : sqrt(price * (1 << 192) / 1e18);
+        uint256 sqrtPriceX96 = zeroToOne ? sqrt(1e18 * (1 << 192) / price) : sqrt(price * (1 << 132) / 1e18 * (1 << 60));
         int24 rawTick = getTickAtSqrtRatio(uint160(sqrtPriceX96));
     
         int24 tickSpacing;
@@ -232,15 +232,15 @@ library TickMath {
         int24 adjustedTick;
         if (zeroToOne) {
             if(!direction) {
-                adjustedTick = ((rawTick + tickSpacing - 1) / tickSpacing) * tickSpacing;
+                adjustedTick = rawTick >= 0 ? ((rawTick + tickSpacing - 1) / tickSpacing) * tickSpacing : (rawTick / tickSpacing) * tickSpacing;
             } else {
-                adjustedTick = (rawTick / tickSpacing) * tickSpacing;
+                adjustedTick = rawTick >= 0 ? (rawTick / tickSpacing) * tickSpacing : ((rawTick - tickSpacing + 1) / tickSpacing) * tickSpacing;
             }
         } else {
             if(!direction) {
-                adjustedTick = (rawTick / tickSpacing) * tickSpacing;
+                adjustedTick = rawTick >= 0 ?  (rawTick / tickSpacing) * tickSpacing : ((rawTick - tickSpacing + 1) / tickSpacing) * tickSpacing;
             } else {
-                adjustedTick = ((rawTick + tickSpacing - 1) / tickSpacing) * tickSpacing;
+                adjustedTick = rawTick >= 0 ? ((rawTick + tickSpacing - 1) / tickSpacing) * tickSpacing : (rawTick / tickSpacing) * tickSpacing;
             }
         }
         

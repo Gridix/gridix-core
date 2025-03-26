@@ -92,7 +92,7 @@ contract UniLimitHelper {
      * @param gridAddress Address of the grid strategy contract
      * @return needSwap Whether rebalancing is needed
      */
-    function checkRebalanceNeeded(address gridAddress) external view returns (
+    function checkRebalanceNeeded(address gridAddress) public view returns (
         bool needSwap
     ) {
         ILimitGrid grid = ILimitGrid(gridAddress);
@@ -104,16 +104,19 @@ contract UniLimitHelper {
      * @param gridAddress Address of the grid strategy contract
      * @return canActivate Whether the strategy can be activated
      */
-    function checkCanActivate(address gridAddress) external view returns (
+    function checkCanActivate(address gridAddress) public view returns (
         bool canActivate
     ) {
         ILimitGrid grid = ILimitGrid(gridAddress);
-        if (grid.status() != ILimitGrid.GridStrategyStatus.Inactive) {
+        ILimitGrid.GridScheme memory gridScheme = grid.gridScheme();
+        uint256 currentPrice = grid.getPriceFromOracle();
+        if (grid.status() != ILimitGrid.GridStrategyStatus.Inactive || currentPrice > gridScheme.upperPrice || currentPrice < gridScheme.lowerPrice) {
             return false;
         }
-        uint256 currentPrice = grid.getPriceFromOracle();
-        uint256 triggerPrice = grid.gridScheme().triggerPrice;
-        return currentPrice <= triggerPrice;
+        if(gridScheme.totalInvestment == 0 && currentPrice < gridScheme.triggerPrice || gridScheme.extraToken1Amount == 0 && currentPrice > gridScheme.triggerPrice) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -164,8 +167,7 @@ contract UniLimitHelper {
             if (poolAddress != address(0)) {
                 IUniswapV3Pool pool = IUniswapV3Pool(poolAddress);
                 
-                (, , , uint128 liquidity, , , ) = pool.slot0();
-                
+                uint128 liquidity = pool.liquidity();
                 if (liquidity > maxLiquidity) {
                     maxLiquidity = liquidity;
                     bestFee = fees[i];
@@ -173,5 +175,42 @@ contract UniLimitHelper {
             }
         }
         return bestFee;
+    }
+
+    function batchCheckCanActivate(address[] calldata gridAddresses) external view returns (
+        bool[] memory results
+    ) {
+        results = new bool[](gridAddresses.length);
+        
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            results[i] = this.checkCanActivate(gridAddresses[i]);
+        }
+        
+        return results;
+    }
+
+    function batchCheckRebalanceNeeded(address[] calldata gridAddresses) external view returns (
+        bool[] memory results
+    ) {
+        results = new bool[](gridAddresses.length);
+        
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            results[i] = this.checkRebalanceNeeded(gridAddresses[i]);
+        }
+        
+        return results;
+    }
+
+    function checkGridStrategyStatus(address[] calldata gridAddresses) external view returns (
+        ILimitGrid.GridStrategyStatus[] memory statuses
+    ) {
+        statuses = new ILimitGrid.GridStrategyStatus[](gridAddresses.length);
+        
+        for (uint256 i = 0; i < gridAddresses.length; i++) {
+            ILimitGrid grid = ILimitGrid(gridAddresses[i]);
+            statuses[i] = grid.status();
+        }
+        
+        return statuses;
     }
 } 

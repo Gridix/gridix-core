@@ -51,6 +51,7 @@ abstract contract LimitGridBase is Ownable {
      * @param upperPrice Maximum price for the grid range
      * @param gridCount Number of grid lines
      * @param totalInvestment Total investment amount in token0
+     * @param extraToken1Amount Additional token1 amount
      * @param triggerPrice Price at which the strategy should be activated
      */
     struct GridScheme {
@@ -58,13 +59,14 @@ abstract contract LimitGridBase is Ownable {
         uint256 upperPrice;
         uint256 gridCount;
         uint256 totalInvestment;
+        uint256 extraToken1Amount;
         uint256 triggerPrice;
     }
 
     // Events
     event GridStrategyActivated(uint256 currentPrice, uint256 token0Amount, uint256 token1Amount, uint256 time);
     event SlippageUpdated(uint256 slippage);
-    event RebalanceExecuted(uint256 currentPrice, uint256 token0Amount, uint256 token1Amount, uint256 time);
+    event RebalanceExecuted(uint256 lastPrice, uint256 currentPrice, uint256 token0Amount, uint256 token1Amount, uint256 time);
     event StrategyTerminated(uint256 remainingToken0, uint256 remainingToken1, uint256 price, uint256 time);
 
     /**
@@ -82,29 +84,34 @@ abstract contract LimitGridBase is Ownable {
         require(status == GridStrategyStatus.Active, "GNA");
         uint256 currentPrice = getPriceFromOracle();
         uint256 fee = gridFactory.getExecutionFee(address(token0));
-        if(token0.balanceOf(address(this)) > fee) {
-            token0.safeTransfer(msg.sender, fee);
-        }
+        
         if(currentPrice > gridScheme.upperPrice || currentPrice < gridScheme.lowerPrice) {
-            _terminateStrategy();
+            _terminateStrategy(currentPrice);
             return;
         }
         uint256 gridPrice = (gridScheme.upperPrice - gridScheme.lowerPrice) / gridScheme.gridCount;
         require(currentPrice > lastPrice + gridPrice || currentPrice < lastPrice - gridPrice, "NM");
 
         uint256 swapAmount;
+        uint256 swapFee;
         if(currentPrice > lastPrice + gridPrice) {
             swapAmount = token1.balanceOf(address(this)) * (currentPrice - lastPrice) / (gridScheme.upperPrice - lastPrice);
+            swapFee = swapAmount * currentPrice / 1e18 * gridFactory.swapFeeRate() / 10_000;
             swapByRouter(false, swapAmount, currentPrice);
         } else {
             swapAmount = token0.balanceOf(address(this)) * (lastPrice - currentPrice) / (lastPrice - gridScheme.lowerPrice);
+            swapFee = swapAmount * gridFactory.swapFeeRate() / 10_000;
             swapByRouter(true, swapAmount, currentPrice);
         }
         uint256 token0Balance = token0.balanceOf(address(this));
+        if(token0Balance > swapFee + fee) {
+            token0.safeTransfer(msg.sender, fee);
+            token0.safeTransfer(gridFactory.feeAddr(), swapFee);
+            gridFactory.notifyUpdated(address(token0), fee + swapFee);
+        }
         uint256 token1Balance = token1.balanceOf(address(this));
+        emit RebalanceExecuted(lastPrice, currentPrice, token0Balance - fee - swapFee, token1Balance, block.timestamp);
         lastPrice = currentPrice;
-        gridFactory.notifyUpdated(token0Balance + token1Balance * currentPrice / 1e18);
-        emit RebalanceExecuted(currentPrice, token0Balance, token1Balance, block.timestamp);
     }
 
     /**
@@ -112,8 +119,13 @@ abstract contract LimitGridBase is Ownable {
      * @dev Only callable by owner when strategy is active
      */
     function terminateStrategyByOwner() external onlyOwner {
+        uint256 currentPrice = getPriceFromOracle();
+        if(status == GridStrategyStatus.Inactive) {
+            _closeStrategy(currentPrice);
+            return;
+        }
         require(status == GridStrategyStatus.Active, "GNA");
-        _terminateStrategy();
+        _terminateStrategy(currentPrice);
     }
 
     /**
@@ -129,16 +141,17 @@ abstract contract LimitGridBase is Ownable {
 
     /**
      * @notice Activate the grid strategy
-     * @param amount Initial token1 amount (if called by factory)
      * @dev Strategy can only be activated when price is below trigger price
      */
-    function activateGridStrategy(uint256 amount) external {
+    function activateGridStrategy() external {
         uint256 currentPrice = getPriceFromOracle();
-        if (status != GridStrategyStatus.Inactive || currentPrice > gridScheme.triggerPrice) {
+        if (status != GridStrategyStatus.Inactive || currentPrice > gridScheme.upperPrice || currentPrice < gridScheme.lowerPrice) {
             return;
         }
-        uint256 token1Amount = (msg.sender == address(gridFactory)) ? amount : 0;
-        _initial(gridScheme, currentPrice, token1Amount);
+        if(gridScheme.totalInvestment == 0 && currentPrice < gridScheme.triggerPrice || gridScheme.extraToken1Amount == 0 && currentPrice > gridScheme.triggerPrice) {
+            return;
+        }
+        _initial(currentPrice);
     }
 
     /**
@@ -152,21 +165,19 @@ abstract contract LimitGridBase is Ownable {
 
     /**
      * @notice Initialize the grid strategy
-     * @param scheme Grid parameters
      * @param currentPrice Current market price
-     * @param extraToken1Amount Additional token1 amount
      * @dev Sets up initial positions and activates the strategy
      */
-    function _initial(GridScheme memory scheme, uint256 currentPrice, uint256 extraToken1Amount) internal {
-        require(scheme.lowerPrice < currentPrice && scheme.upperPrice > currentPrice, "NM");
+    function _initial(uint256 currentPrice) internal {
+        require(gridScheme.lowerPrice < currentPrice && gridScheme.upperPrice > currentPrice, "NM");
 
         uint256 amountIn;
-        uint256 needToken0 = (scheme.totalInvestment + (extraToken1Amount * currentPrice / 1e18)) * (currentPrice - scheme.lowerPrice) / (scheme.upperPrice - scheme.lowerPrice);
-        if (extraToken1Amount == 0 || scheme.totalInvestment > needToken0) {
-            amountIn = scheme.totalInvestment - needToken0;
+        uint256 needToken0 = (gridScheme.totalInvestment + (gridScheme.extraToken1Amount * currentPrice / 1e18)) * (currentPrice - gridScheme.lowerPrice) / (gridScheme.upperPrice - gridScheme.lowerPrice);
+        if (gridScheme.extraToken1Amount == 0 || gridScheme.totalInvestment > needToken0) {
+            amountIn = gridScheme.totalInvestment - needToken0;
             swapByRouter(true, amountIn, currentPrice);
         } else {
-            amountIn = (needToken0 - scheme.totalInvestment) * 1e18 / currentPrice;
+            amountIn = (needToken0 - gridScheme.totalInvestment) * 1e18 / currentPrice;
             swapByRouter(false, amountIn, currentPrice);
         }
 
@@ -176,7 +187,6 @@ abstract contract LimitGridBase is Ownable {
         status = GridStrategyStatus.Active;
         lastPrice = currentPrice;
         gridScheme.totalInvestment = token0Amount + token1Amount * currentPrice / 1e18;
-        gridFactory.notifyUpdated(gridScheme.totalInvestment);
         emit GridStrategyActivated(currentPrice, token0Amount, token1Amount, block.timestamp);
     }
 
@@ -184,9 +194,7 @@ abstract contract LimitGridBase is Ownable {
      * @notice Internal function to terminate the strategy
      * @dev Handles final position adjustments and token transfers
      */
-    function _terminateStrategy() internal {
-        uint256 currentPrice = getPriceFromOracle();
-
+    function _terminateStrategy(uint256 currentPrice) internal {
         uint256 token0Amount = token0.balanceOf(address(this));
         uint256 token1Amount = token1.balanceOf(address(this));
 
@@ -211,7 +219,6 @@ abstract contract LimitGridBase is Ownable {
 
         token0.safeTransfer(owner(), token0Amount);
         token1.safeTransfer(owner(), token1Amount);
-        gridFactory.notifyUpdated(token0Amount + token1Amount * currentPrice / 1e18);
         
         status = GridStrategyStatus.Closed;
         emit StrategyTerminated(token0Amount, token1Amount, currentPrice, block.timestamp);

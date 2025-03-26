@@ -13,6 +13,7 @@ interface ILimitGrid {
         uint256 upperPrice;
         uint256 gridCount;
         uint256 totalInvestment;
+        uint256 extraToken1Amount;
         uint256 triggerPrice;
     }
 

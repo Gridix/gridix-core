@@ -48,8 +48,7 @@ contract UniLimitGrid is IERC721Receiver, LimitGridBase {
         address tokenIn;
         address tokenOut;
         uint256 amountOutMinimum;
-        uint256 swapFee = amountIn * gridFactory.swapFeeRate() / 10_000;
-        amountIn -= swapFee;
+
         if(zeroForOne) {
             tokenIn = address(token0);
             tokenOut = address(token1);
@@ -59,7 +58,6 @@ contract UniLimitGrid is IERC721Receiver, LimitGridBase {
             tokenOut = address(token0);
             amountOutMinimum = amountIn * price / 1e18 * (1000_000 - slippage) / 1000_000;
         }
-        IERC20(tokenIn).safeTransfer(gridFactory.feeAddr(), swapFee);
         IERC20(tokenIn).approve(address(uniSwapRouter), amountIn);
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,

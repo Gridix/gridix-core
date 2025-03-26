@@ -20,7 +20,7 @@ contract UniGridFactory is GridFactoryBase {
     address constant public uniSwapRouter = 0x5FC8d32690cc91D4c39d9d3abcBD16989F875707;
 
     // Event emitted when a new grid strategy is created
-    event GridCreated(address indexed gridAddress, address indexed user, address token0, address token1, uint24 poolFee, uint256 timestamp);
+    event GridCreated(address indexed gridAddress, address indexed user, address token0, address token1, uint256 token0Amount, uint256 token1Amount, uint24 poolFee, uint256 timestamp);
 
     /**
      * @notice Constructor for UniGridFactory
@@ -28,7 +28,8 @@ contract UniGridFactory is GridFactoryBase {
      * @param _feeAddr Address to collect fees
      */
     constructor(uint256 _swapFeeRate, address _feeAddr) GridFactoryBase(_swapFeeRate, _feeAddr, msg.sender) {
-        allowedToken0Addresses[0x2E983A1Ba5e8b38AAAeC4B440B9dDcFBf72E15d1] = true; // USDC token address
+        allowedToken0Addresses[0x663F3ad617193148711d28f5334eE4Ed07016602] = true; // USDC token address
+        allowedToken0Addresses[0x2E983A1Ba5e8b38AAAeC4B440B9dDcFBf72E15d1] = true; // USDT token address
         allowedToken0Addresses[WETH] = true; // WETH token address
     }
 
@@ -50,9 +51,8 @@ contract UniGridFactory is GridFactoryBase {
      * @param token1 Address of token1
      * @param poolFee Pool fee tier
      * @param scheme Grid strategy parameters
-     * @param token1Amount Initial amount of token1 to deposit
      */
-    function creatGrid(address token0, address token1, uint24 poolFee, UniGrid.GridScheme memory scheme, uint256 token1Amount) external {
+    function creatGrid(address token0, address token1, uint24 poolFee, UniGrid.GridScheme memory scheme) external {
         require(checkEligibility(token0, token1, poolFee));
         
         // Create new grid strategy contract
@@ -60,14 +60,16 @@ contract UniGridFactory is GridFactoryBase {
         gridContractToUser[address(grid)] = msg.sender;
 
         // Transfer initial tokens to the grid contract
-        IERC20(token0).safeTransferFrom(msg.sender, address(grid), scheme.totalInvestment);
-        if(token1Amount > 0) {
-            IERC20(token1).safeTransferFrom(msg.sender, address(grid), token1Amount);
+        if(scheme.totalInvestment > 0) {
+            IERC20(token0).safeTransferFrom(msg.sender, address(grid), scheme.totalInvestment);
+        }
+        if(scheme.extraToken1Amount > 0) {
+            IERC20(token1).safeTransferFrom(msg.sender, address(grid), scheme.extraToken1Amount);
         }
 
         // Activate the grid strategy
-        grid.activateGridStrategy(token1Amount);
+        grid.activateGridStrategy();
         
-        emit GridCreated(address(grid), msg.sender, token0, token1, poolFee, block.timestamp);
+        emit GridCreated(address(grid), msg.sender, token0, token1, scheme.totalInvestment, scheme.extraToken1Amount, poolFee, block.timestamp);
     }
 }

@@ -2,6 +2,8 @@
 pragma solidity >=0.7.0 <0.9.0;
 import '../base/GridFactoryBase.sol';
 import '../grid/AeroLimitGrid.sol';
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @dev Interface for Aerodrome pool to get token addresses
@@ -16,6 +18,7 @@ interface IPool {
  * Handles the creation and initial setup of limit order grid trading strategies on Aerodrome
  */
 contract AeroLimitFactory is GridFactoryBase {
+    using SafeERC20 for IERC20;
     // Aerodrome router contract address
     IAeroRouter constant public aeroRouter = IAeroRouter(0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43);
 
@@ -57,17 +60,23 @@ contract AeroLimitFactory is GridFactoryBase {
      * @param _stable Whether to use stable or volatile pool
      * @param _aeroFactory Aerodrome factory address
      * @param scheme Grid strategy parameters
-     * @param token1Amount Initial amount of token1 to deposit
      */
-    function creatGrid(address token0, address token1, bool _stable, address _aeroFactory, AeroLimitGrid.GridScheme memory scheme, uint256 token1Amount) external {
+    function creatGrid(address token0, address token1, bool _stable, address _aeroFactory, AeroLimitGrid.GridScheme memory scheme) external {
         require(checkEligibility(token0, token1, _stable, _aeroFactory), "Pair not eligible");
 
         // Create new grid strategy contract
         AeroLimitGrid grid = new AeroLimitGrid(msg.sender, address(aeroRouter), token0, token1, _stable, _aeroFactory, scheme);
         gridContractToUser[address(grid)] = msg.sender;
 
+        if(scheme.totalInvestment > 0) {
+            IERC20(token0).safeTransferFrom(msg.sender, address(grid), scheme.totalInvestment);
+        }
+        if(scheme.extraToken1Amount > 0) {
+            IERC20(token1).safeTransferFrom(msg.sender, address(grid), scheme.extraToken1Amount);
+        }
+
         // Activate the grid strategy
-        grid.activateGridStrategy(token1Amount);
+        grid.activateGridStrategy();
         
         emit GridCreated(address(grid), msg.sender, token0, token1, _stable, _aeroFactory);
     }
